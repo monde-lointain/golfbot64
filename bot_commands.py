@@ -511,7 +511,7 @@ def generate_rankings_table():
     rated_players = []
 
     for player_id, rating, player_name in player_data:
-        if rating != -1.0:
+        if rating != INVALID_RATING:
             rated_players.append([player_name, rating])
 
     if len(rated_players) == 0:
@@ -632,6 +632,65 @@ def update_database_from_spreadsheet(ctx):
         # Recalculate all adjusted scores and player ratings to ensure correctness
         update_adjusted_scores()
         update_player_ratings()
+
+        # Get the IDs currently in the players table
+        query = f"""
+            SELECT discord_id
+            FROM {PLAYERS_TABLE}
+        """
+        current_player_ids = [elem[0] for elem in db_helper.select(query)]
+
+        # Get the player IDs and their display names from the sheet
+        data = sheets_helper.get(DB_SPREADSHEET_ID, "Players!A2:B")
+
+        db_player_ids = []
+        unnamed_players = []
+        no_score_players = []
+        sheet_player_ids = [entry[0] for entry in data]
+
+        for entry in data:
+            player_id = int(entry[0])
+
+            if len(entry) == 1:
+                # ID does not have a name associated with it
+                unnamed_players.append(player_id)
+                continue
+
+            # Get the newly entered player's current rating
+            query = f"""
+                SELECT rating
+                FROM {SCORES_TABLE}
+                WHERE (player_id, timestamp) IN (
+                    SELECT player_id, MAX(timestamp) AS latest_timestamp
+                    FROM {SCORES_TABLE}
+                    WHERE player_id = %s
+                    GROUP BY player_id
+                );
+            """
+            rating = db_helper.select(query, (player_id,))
+
+            if rating == []:
+                no_score_players.append(player_id)
+                continue
+
+            rating = rating[0][0]
+            player_name = entry[1]
+
+            # Update the player table with the new player ID, their display name and their rating
+            ratings_insert_query = f"""
+                INSERT INTO {PLAYERS_TABLE} (discord_id, player_name, rating)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (discord_id)
+                DO UPDATE SET
+                    rating = excluded.rating,
+                    player_name = excluded.player_name;
+            """
+            db_helper.insert_single(ratings_insert_query, (player_id, player_name, rating))
+
+        if (len(unnamed_players) != 0):
+            return ctx.respond(f"Players {unnamed_players} in the Players sheet do not have names. Excluding them from the rankings table.")
+        elif (len(no_score_players) != 0):
+            return ctx.respond(f"Players {unnamed_players} in the Players sheet do not have any scores registered.")
 
         return ctx.respond("Finished updating database.")
     except Exception as e:

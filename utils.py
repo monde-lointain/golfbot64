@@ -34,6 +34,7 @@ def get_moderator_role(ctx):
 
 def fill_db_spreadsheet():
     try:
+        # Fill scores spreadsheet
         query = f"""
             SELECT timestamp, course_id, player_id, character, score
             FROM {SCORES_TABLE}
@@ -56,6 +57,26 @@ def fill_db_spreadsheet():
         last_updated_msg = f"Last sync (UTC): {formatted_time}"
         sheets_helper.write_data(
             DB_SPREADSHEET_ID, [[last_updated_msg]], "Scores", "F1")
+        
+        # Fill players spreadsheet
+        query = f"""
+            SELECT discord_id, player_name
+            FROM {PLAYERS_TABLE};
+        """
+        sheet = [list(row) for row in db_helper.select(query)]
+
+        # Clear the spreadsheet before writing
+        sheets_helper.clear(DB_SPREADSHEET_ID, "Players", "A2:C")
+
+        # Change every player ID to a string so it doesn't get truncated by the sheet
+        for i in range(len(sheet)):
+            sheet[i][0] = str(sheet[i][0])
+        header = ("player_id", "player_name")
+        sheet.insert(0, header)
+        sheets_helper.write_data(DB_SPREADSHEET_ID, sheet, "Players", "A1")
+        sheets_helper.write_data(
+            DB_SPREADSHEET_ID, [[last_updated_msg]], "Players", "C1")
+
     except Exception as e:
         print(e)
         raise
