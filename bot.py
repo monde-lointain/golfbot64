@@ -8,6 +8,7 @@ from discord.commands import option
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
+import asyncio
 import os
 import logging
 
@@ -43,22 +44,11 @@ async def on_ready():
     print('------')
 
     generate_rankings_task.start()
-    # update_difficulty_indices_task.start()
+    update_difficulty_indices_task.start()
 
-    # # Wait for 1 hour after bot logs on
-    # await asyncio.sleep(3600)
+    # Wait for 1 hour after bot logs on
+    await asyncio.sleep(3600)
     sync_spreadsheet_with_database_task.start()
-
-################################################################################
-# BOT HELPER FUNCTIONS
-################################################################################
-
-async def get_player_names(ctx: discord.AutocompleteContext):
-    query = f"""
-        SELECT player_name
-        FROM {PLAYERS_TABLE}
-    """
-    return [item[0] for item in db_helper.select(query)]
 
 ################################################################################
 # BOT SLASH COMMANDS
@@ -303,6 +293,35 @@ async def sync_spreadsheet_with_database_task():
         logger.info("Synced spreadsheet with database.")
     except:
         logger.error("An error occured while syncing the spreadsheet. Please try again later.")
+
+
+@tasks.loop(hours=700.0)
+async def update_difficulty_indices_task():
+    """
+    Task that updates difficulty indices and the difficulty indices
+    spreadsheet.
+
+    This task runs every 700 hours (approximately once a month) and updates
+    the difficulty indices and associated spreadsheet.
+
+    Parameters:
+        none
+
+    Returns:
+        none
+
+    Raises:
+        Exception: If an error occurs while updating difficulty indices.
+    """
+
+    logger.info("Updating difficulty indices...")
+
+    try:
+        bot_commands.update_difficulty_indices()
+        bot_commands.generate_difficulty_indices_sheet()
+        logger.info("Finished updating difficulty indices.")
+    except:
+        logger.error("An error occured while updating difficulty indices. Please try again later.")
 
 ################################################################################
 # BOT INITIALIZATION FUNCTION
