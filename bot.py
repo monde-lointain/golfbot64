@@ -125,6 +125,34 @@ async def change_name(ctx, new_name):
     await bot_commands.change_player_display_name(ctx, new_name)
 
 
+@bot.slash_command(name="top10", description="Get the top 10 players in the rankings.")
+async def get_top_10(ctx):
+    """
+    Slash command to create and post the current top 10 players in the rankings.
+
+    Parameters:
+        ctx: The context of the command.
+
+    Returns:
+        none
+    """
+    await bot_commands.get_top_10_table(ctx)
+
+
+@bot.slash_command(name="difficulty_indices", description="Get the difficulty indices for each course.")
+async def get_difficulty_indices(ctx):
+    """
+    Slash command to create and post the current difficulty indices for each course.
+
+    Parameters:
+        ctx: The context of the command.
+
+    Returns:
+        none
+    """
+    await bot_commands.get_difficulty_indices_table(ctx)
+
+
 @bot.slash_command(name="profile", description="Get a player's profile.")
 @option("player_id", description="Enter the Discord ID of the player. Leave blank to get your profile.", required=False)
 async def get_profile(ctx, player_id):

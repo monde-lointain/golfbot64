@@ -749,6 +749,63 @@ def update_database_from_spreadsheet(ctx):
         return ctx.respond("Finished updating database.")
     except Exception as e:
         return ctx.respond(f"Error updating database: {e}")
+    
+
+def get_top_10_table(ctx):
+
+    try:
+        query = f"""
+            SELECT player_id, rating, player_name
+            FROM {PLAYERS_TABLE};
+        """
+        player_data = db_helper.select(query)
+    except Exception as e:
+        return print(f"Error: {e}")
+
+    # Separate players with no valid rating
+    rated_players = []
+
+    for player_id, rating, player_name in player_data:
+        if rating != INVALID_RATING:
+            rated_players.append([player_name, rating])
+
+    if len(rated_players) == 0:
+        logger.info("No players are currently rated.")
+        logger.info("Finished updating rankings.")
+        return ctx.respond("No players are currently ranked.")
+    
+    # Sort players based on rating
+    rated_players.sort(key=lambda x: x[1])
+
+    # Assign ranks to rated players
+    rankings_sheet = [[rank, player_name, f"{rating:.2f}"] 
+                      for rank, [player_name, rating] in enumerate(rated_players, start=1)]
+    
+    # Use the top 10 entries of the rankings to create the table
+    top_10_table = table_generation.create_ascii_table("Server Rankings", ["Rank", "Player", "Rating"], rankings_sheet[:10])
+    table_stream = table_generation.create_image_from_table(str(top_10_table))
+    attachment = discord.File(fp=table_stream, filename="rankings.png")
+    table_stream.close()
+    return ctx.respond(file=attachment)
+
+
+def get_difficulty_indices_table(ctx):
+
+    difficulty_indices = get_difficulty_indices()
+    difficulty_indices_data = []
+
+    for course_id in range(len(COURSES)):
+        course = COURSES[course_id]
+        front_9_index = difficulty_indices[course_id * 2]
+        back_9_index = difficulty_indices[course_id * 2 + 1]
+        difficulty_indices_data.append([course, f"{front_9_index:.2f}", f"{back_9_index:.2f}"])
+    
+    # Create and post the difficulty indices table from the data
+    difficulty_indices_table = table_generation.create_ascii_table("Course Difficulty Indices", ["Course", "Front 9", "Back 9"], difficulty_indices_data)
+    table_stream = table_generation.create_image_from_table(str(difficulty_indices_table))
+    attachment = discord.File(fp=table_stream, filename="rankings.png")
+    table_stream.close()
+    return ctx.respond(file=attachment)
 
 
 def get_player_profile(ctx, player_id):
