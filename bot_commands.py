@@ -751,10 +751,16 @@ def update_database_from_spreadsheet(ctx):
         return ctx.respond(f"Error updating database: {e}")
 
 
-def get_player_profile(ctx):
+def get_player_profile(ctx, player_id):
+
+    if player_id.isdigit() == False:
+        return ctx.respond("Player ID must be an integer.")
+
+    if player_id == None:
+        # If no ID was entered, get the poster's profile
+        player_id = ctx.author.id
 
     # Get the player's name and rating from the database
-    player_id = ctx.author.id
     query = f"""
         SELECT player_name, rating
         FROM {PLAYERS_TABLE}
@@ -832,10 +838,16 @@ def get_player_profile(ctx):
     return ctx.respond(file=attachment)
 
 
-def get_recent_score_table(ctx):
+def get_recent_score_table(ctx, player_id):
+
+    if player_id.isdigit() == False:
+        return ctx.respond("Player ID must be an integer.")
+
+    if player_id == None:
+        # If no ID was entered, get the poster's recent scores
+        player_id = ctx.author.id
 
     # Get the player's name and rating from the database
-    player_id = ctx.author.id
     query = f"""
         SELECT player_name
         FROM {PLAYERS_TABLE}

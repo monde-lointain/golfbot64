@@ -1,4 +1,5 @@
 import bot_commands
+import db_helper
 import utils
 from globals import *
 
@@ -47,6 +48,17 @@ async def on_ready():
     # # Wait for 1 hour after bot logs on
     # await asyncio.sleep(3600)
     sync_spreadsheet_with_database_task.start()
+
+################################################################################
+# BOT HELPER FUNCTIONS
+################################################################################
+
+async def get_player_names(ctx: discord.AutocompleteContext):
+    query = f"""
+        SELECT player_name
+        FROM {PLAYERS_TABLE}
+    """
+    return [item[0] for item in db_helper.select(query)]
 
 ################################################################################
 # BOT SLASH COMMANDS
@@ -113,8 +125,9 @@ async def change_name(ctx, new_name):
     await bot_commands.change_player_display_name(ctx, new_name)
 
 
-@bot.slash_command(name="profile", description="Get your player profile.")
-async def get_profile(ctx):
+@bot.slash_command(name="profile", description="Get a player's profile.")
+@option("player_id", description="Enter the Discord ID of the player. Leave blank to get your profile.", required=False)
+async def get_profile(ctx, player_id):
     """
     Slash command to create and post the current player's profile.
 
@@ -125,11 +138,12 @@ async def get_profile(ctx):
         none
     """
 
-    await bot_commands.get_player_profile(ctx)
+    await bot_commands.get_player_profile(ctx, player_id)
 
 
 @bot.slash_command(name="recent_scores", description="Get your 40 most recent scores.")
-async def get_recent_scores(ctx):
+@option("player_id", description="Enter the Discord ID of the player. Leave blank to get your recent scores.", required=False)
+async def get_recent_scores(ctx, player_id):
     """
     Slash command to create and post the current player's most 40 recent scores.
 
@@ -140,7 +154,7 @@ async def get_recent_scores(ctx):
         none
     """
 
-    await bot_commands.get_recent_score_table(ctx)
+    await bot_commands.get_recent_score_table(ctx, player_id)
 
 
 @bot.slash_command(name="submit_score", description="Submit a score into into the queue to be verified.")
