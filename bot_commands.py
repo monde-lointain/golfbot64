@@ -14,6 +14,7 @@ import utils
 
 import discord
 
+from collections import defaultdict
 from datetime import datetime
 import math
 import random
@@ -810,7 +811,7 @@ def get_difficulty_indices_table(ctx):
 
 def get_player_profile(ctx, player_id):
 
-    if player_id.isdigit() == False:
+    if player_id is not None and player_id.isdigit() == False:
         return ctx.respond("Player ID must be an integer.")
 
     if player_id == None:
@@ -897,7 +898,7 @@ def get_player_profile(ctx, player_id):
 
 def get_recent_score_table(ctx, player_id):
 
-    if player_id.isdigit() == False:
+    if player_id is not None and player_id.isdigit() == False:
         return ctx.respond("Player ID must be an integer.")
 
     if player_id == None:
@@ -952,3 +953,133 @@ def get_recent_score_table(ctx, player_id):
     attachment = discord.File(fp=table_stream, filename="table.png")
     table_stream.close()
     return ctx.respond(file=attachment)
+
+
+def update_difficulty_indices():
+
+    # Number of scores for each course to be considered for average calculation
+    NUM_REQUIRED_SCORES = 8
+
+    # Get the score info for all players who have played each course more than
+    # the minimum number of times required
+    query = f"""
+        SELECT s.player_id, s.course_id, s.timestamp, s.score
+        FROM {SCORES_TABLE} s
+        WHERE s.player_id IN (
+        SELECT p.discord_id
+        FROM {PLAYERS_TABLE} p
+        WHERE (
+            SELECT COUNT(DISTINCT c.course_id)
+            FROM {COURSES_TABLE} c
+            WHERE (
+            SELECT COUNT(s.course_id)
+            FROM {SCORES_TABLE}  s
+            WHERE s.player_id = p.discord_id
+            AND s.course_id = c.course_id
+            ) >= {NUM_REQUIRED_SCORES}
+        ) = (SELECT COUNT(*) FROM {COURSES_TABLE})
+        );
+    """
+    scores = [list(entry) for entry in db_helper.select(query)]
+
+    # Create a dictionary to store player data.
+    player_data = defaultdict(list)
+    
+    # Sort the data by timestamp
+    scores.sort(key=lambda x: x[2])
+    
+    for player_id, course_id, date, score in scores:
+        player_data[player_id].append((course_id, date, score))
+
+    player_course_averages = {}
+    
+    for player_id, rounds in player_data.items():
+        course_averages = defaultdict(list)
+        
+        for course_id, date, score in rounds:
+            course_averages[course_id].append(score)
+        
+        player_course_averages[player_id] = {}
+        
+        for course_id, scores in course_averages.items():
+            recent_scores = scores[-NUM_REQUIRED_SCORES:]
+            average_score = sum(recent_scores) / len(recent_scores)
+            player_course_averages[player_id][course_id] = average_score
+    
+    # Calculate the average of average scores for each player for each course.
+    course_averages_by_player = defaultdict(lambda: defaultdict(list))
+    
+    for player_id, course_averages in player_course_averages.items():
+        for course_id, average_score in course_averages.items():
+            course_averages_by_player[course_id][player_id] = average_score
+    
+    final_averages = {}
+    
+    for course_id, player_averages in course_averages_by_player.items():
+        average = sum(player_averages.values()) / len(player_averages)
+        final_averages[course_id] = average
+
+    difficulty_indices = {}
+
+    # Calculate the overall average of course averages
+    overall_avg = sum(final_averages.values()) / len(final_averages)
+
+    difficulty_indices = {}
+
+    for course, course_avg in final_averages.items():
+        # Calculate the difficulty index for each course
+        difficulty_indices[course] = course_avg - overall_avg
+
+    # Flatten the dictionary into a list
+    flattened_indices = [(course, difficulty_index) for course, difficulty_index in difficulty_indices.items()]
+
+    # Update database with new indices
+    update_query = f"""
+        UPDATE {COURSES_TABLE} c
+        SET difficulty_index = v.index
+        FROM (VALUES %s) AS v(id, index)
+        WHERE c.course_id = v.id;
+    """
+    db_helper.update_multiple(update_query, flattened_indices)
+
+def generate_difficulty_indices_sheet():
+    """
+    Generate a spreadsheet table with difficulty indices for all courses.
+
+    Parameters:
+        none
+
+    Returns:
+        None
+
+    Raises:
+        Exception: If there is an error during the database interaction.
+    """
+
+    try:
+        query = f"""
+            SELECT difficulty_index
+            FROM {COURSES_TABLE}
+            ORDER BY course_id;
+        """
+        result = db_helper.select(query)
+
+        indices_table = [[] for _ in range(len(COURSES))]
+
+        for course_index in range(len(COURSES)):
+            front_index = result[(course_index * 2)][0]
+            back_index = result[(course_index * 2) + 1][0]
+            row = [front_index, back_index]
+            indices_table[course_index] = row
+
+        sheets_helper.write_data(
+            LEADERBOARD_SPREADSHEET_ID, indices_table, "Difficulty Indices", "B4")
+
+        now = datetime.utcnow()
+        formatted_time = now.strftime("%m/%d/%Y %H:%M:%S")
+        last_updated_msg = f"Last updated: {formatted_time}"
+        sheets_helper.write_data(
+            LEADERBOARD_SPREADSHEET_ID, [[last_updated_msg]], "Difficulty Indices", "A2")
+    except Exception:
+        raise
+
