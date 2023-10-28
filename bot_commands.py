@@ -381,6 +381,22 @@ def remove_score_from_queue(ctx, hash):
     
 
 def calculate_player_rating(scores):
+    """
+    Calculates a player's rating based on their adjusted scores.
+
+    This function calculates a player's rating based on their adjusted
+    scores. The rating is determined by either taking the average of all scores
+    if there are fewer than 40 scores available, or by taking the average of the
+    most recent 40 scores if there are more than 40 scores available. If the
+    player has less than the minimum required scores, then the player is
+    assigned a default value for their rating. 
+
+    Parameters:
+        scores (list of int): A list of scores sorted from oldest to newest.
+
+    Returns:
+        float: The player's calculated rating based on their scores.
+    """
 
     MIN_REQUIRED_SCORES = 6
     ROLLING_AVERAGE_WINDOW = 40
@@ -434,6 +450,24 @@ def update_adjusted_scores():
 
 
 def update_player_ratings():
+    """
+    Updates player ratings based on their score history.
+
+    This function updates player ratings by calculating them based on the
+    history of their adjusted scores. It retrieves score data from a database
+    table, sorts the data by timestamp, and then iteratively calculates player
+    ratings for each round of scores.
+
+    The updated ratings are then stored in the database, and the function also
+    updates a table containing info for each player with the players' current
+    ratings.
+
+    Parameters:
+        none
+
+    Returns:
+        none
+    """
 
     select_query = f"""
         SELECT round_id, player_id, timestamp, course_id, adjusted_score
@@ -454,6 +488,9 @@ def update_player_ratings():
         score_data_dict[player_id].append(
             [round_id, timestamp, course_id, adjusted_score, 0.0])
 
+    player_index = 0
+    current_ratings = []
+
     # Calculate and update player ratings based on score history
     for player_id in score_data_dict:
         score_data_dict[player_id].sort(key=lambda x: x[1])  # Sort by timestamp
@@ -462,6 +499,10 @@ def update_player_ratings():
             adjusted_scores = [entry[3] for entry in score_data_dict[player_id][:round_id + 1]]
             rating = calculate_player_rating(adjusted_scores)
             score_data_dict[player_id][round_id][4] = rating
+
+        # Get the player's rating after their most recent score and add an entry for their current rating
+        current_rating = score_data_dict[player_id][-1][4]
+        current_ratings.append((player_id, current_rating))
 
     # Flatten dictionary for database update
     flattened_score_data = [score 
@@ -476,6 +517,14 @@ def update_player_ratings():
         WHERE s.round_id = round.id;
     """
     db_helper.update_multiple(update_query, flattened_score_data)
+    
+    update_query = f"""
+        UPDATE {PLAYERS_TABLE} p
+        SET rating = player.rating
+        FROM (VALUES %s) AS player(discord_id, rating)
+        WHERE p.discord_id = player.discord_id;
+    """
+    db_helper.update_multiple(update_query, current_ratings)
     
 
 def generate_rankings_table():
@@ -590,16 +639,22 @@ def check_row_valid(row):
 
 def update_database_from_spreadsheet(ctx):
     """
-    Update the database with data from the spreadsheet.
+    Updates a database with data from the spreadsheet.
+
+    The function performs the following steps:
+    1. Retrieves data from the Google Sheets spreadsheet.
+    2. Validates the data rows using the check_row_valid() function.
+    3. Deletes existing database tables and resets serials.
+    4. Inserts the validated data into the database.
+    5. Recalculates adjusted scores and player ratings.
+    6. Updates the player table with player IDs from the spreadsheet, along with
+      their display names.
 
     Parameters:
         ctx: The context of the command.
 
     Returns:
-        str: A response indicating the result of the database update.
-
-    Raises:
-        Exception: If an error occurred while updating the database.
+        str: A response indicating the result of the update.
     """
 
     moderator_role = utils.get_moderator_role(ctx)
@@ -616,13 +671,12 @@ def update_database_from_spreadsheet(ctx):
                 # header row + 1
                 return ctx.respond(f"Error updating database: One or more elements missing/invalid at row {i + 2}.")
 
-        # Delete rounds table
-        db_helper.delete(f"TRUNCATE TABLE {SCORES_TABLE} RESTART IDENTITY;")
+        # Delete rounds and players tables and reset the serials
+        db_helper.delete(f"TRUNCATE TABLE {SCORES_TABLE}, {PLAYERS_TABLE} RESTART IDENTITY;")
 
-        # Insert a dummy value for adjusted score
+        # Insert the data from the spreadsheet into the scores table, using a dummy value for adjusted score
         insert_data = [(int(timestamp), int(course_id), int(player_id), character, int(score), 0.0) 
                        for [timestamp, course_id, player_id, character, score] in data]
-
         insert_query = f"""
             INSERT INTO {SCORES_TABLE} (timestamp, course_id, player_id, character, score, adjusted_score) 
             VALUES %s;
