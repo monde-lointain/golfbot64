@@ -143,6 +143,21 @@ async def get_difficulty_indices(ctx):
     await bot_commands.get_difficulty_indices_table(ctx)
 
 
+@bot.slash_command(name="top_scores", description="Get the all-time best scores in the server.")
+async def generate_top_scores(ctx):
+    """
+    Slash command to create and post the top 18-hole adjusted scores of all time.
+
+    Parameters:
+        ctx: The context of the command.
+
+    Returns:
+        none
+    """
+
+    await bot_commands.generate_top_scores_table(ctx)
+
+
 @bot.slash_command(name="profile", description="Get a player's profile.")
 @option("player_id", description="Enter the Discord ID of the player. Leave blank to get your profile.", required=False)
 async def get_profile(ctx, player_id):
