@@ -803,6 +803,46 @@ def get_top_10_table(ctx):
     return ctx.respond(file=attachment)
 
 
+def generate_top_scores_table(ctx):
+
+    # Fetch the round info for the top 50 18-hole adjusted scores for all players
+    query = f"""
+        SELECT p.player_name, s.timestamp, c.course_name, c.nine, s.character, s.score, c.difficulty_index, s.adjusted_score
+        FROM {SCORES_TABLE} s
+        JOIN {COURSES_TABLE} c ON s.course_id = c.course_id
+        JOIN {PLAYERS_TABLE} p ON s.player_id = p.discord_id
+        ORDER BY adjusted_score ASC, s.timestamp ASC;
+    """
+    scores = db_helper.select(query)[:50]
+
+    top_scores_table_data = []
+    rank = 1
+    prev_adjusted_score = None
+    tied_rank = None
+
+    for player_name, timestamp, course_name, nine, character, score, difficulty_index, adjusted_score in scores:
+        course_str = f"{course_name} ({nine})"
+        if adjusted_score == prev_adjusted_score:
+            prev_adjusted_score = adjusted_score
+            entry = [tied_rank, player_name, datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d"), course_str, character, score, f"{difficulty_index:.2f}", f"{adjusted_score:.2f}"]
+            top_scores_table_data.append(entry)
+            rank += 1
+            continue
+
+        prev_adjusted_score = adjusted_score
+        entry = [rank, player_name, datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d"), course_str, character, score, f"{difficulty_index:.2f}", f"{adjusted_score:.2f}"]
+        top_scores_table_data.append(entry)
+        tied_rank = rank
+        rank += 1
+
+    top_scores_table = table_generation.create_ascii_table(f"Top Scores", ["Rank", "Player", "Date", "Course", "Character", "Score", "Diff.Ind.", "Adj.Score"], top_scores_table_data)
+    table_stream = table_generation.create_image_from_table(str(top_scores_table))
+    formatted_date = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    attachment = discord.File(fp=table_stream, filename=f"top_scores_{formatted_date}.png")
+    table_stream.close()
+    return ctx.respond(file=attachment)
+
+
 def get_difficulty_indices_table(ctx):
 
     difficulty_indices = get_difficulty_indices()
@@ -921,7 +961,8 @@ def get_player_profile(ctx, player_id):
     )
 
     table_stream = table_generation.create_image_from_table(table_str)
-    attachment = discord.File(fp=table_stream, filename="profile.png")
+    formatted_date = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    attachment = discord.File(fp=table_stream, filename=f"profile_pid{player_id}_{formatted_date}.png")
     table_stream.close()
     return ctx.respond(file=attachment)
 
@@ -1071,6 +1112,7 @@ def update_difficulty_indices():
         WHERE c.course_id = v.id;
     """
     db_helper.update_multiple(update_query, flattened_indices)
+
 
 def generate_difficulty_indices_sheet():
     """
