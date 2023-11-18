@@ -66,12 +66,23 @@ def get_rankings_sheet(ctx):
 
 
 def change_player_display_name(ctx, new_name):
+    """
+    Change the display name of a player in a game database.
+
+    Parameters:
+        ctx: The context of the command.
+        new_name: The new display name.
+
+    Returns:
+        str: A message indicating the result of the name change operation.
+    """
 
     if (len(new_name) > 32):
         return ctx.respond("Error: Name is too long. Name change not applied.")
     
     player_id = ctx.author.id
 
+    # Get all player IDs from the database
     query = f"""
         SELECT discord_id
         FROM {PLAYERS_TABLE}
@@ -79,9 +90,9 @@ def change_player_display_name(ctx, new_name):
     player_ids = [item[0] for item in db_helper.select(query)]
 
     if player_id not in player_ids:
-        message = "You must have at least one score verified to change your name."
-        return ctx.respond(message)
+        return ctx.respond("You must have at least one score verified to change your name.")
     
+    # Update display name in database with the new name
     update_query = f"""
         UPDATE {PLAYERS_TABLE} p
         SET player_name = %s
@@ -167,6 +178,7 @@ def add_score_to_queue(ctx, course, nine, character, score):
         values = (timestamp, new_hash, course_id, player_id, player_name, character, score)
         db_helper.insert_single(query, values)
 
+        # Make it so it always shows the sign of the score
         score_str = str(score)
         if score == 0:
             score_str = f"±{score}"
@@ -656,6 +668,9 @@ def update_database_from_spreadsheet(ctx):
 
     Returns:
         str: A response indicating the result of the update.
+
+    Raises:
+        Exception: If an error occurred while updating the database.
     """
 
     moderator_role = utils.get_moderator_role(ctx)
@@ -698,10 +713,8 @@ def update_database_from_spreadsheet(ctx):
         # Get the player IDs and their display names from the sheet
         data = sheets_helper.get(DB_SPREADSHEET_ID, "Players!A2:B")
 
-        db_player_ids = []
         unnamed_players = []
         no_score_players = []
-        sheet_player_ids = [entry[0] for entry in data]
 
         for entry in data:
             player_id = int(entry[0])
@@ -804,7 +817,7 @@ def get_difficulty_indices_table(ctx):
     # Create and post the difficulty indices table from the data
     difficulty_indices_table = table_generation.create_ascii_table("Course Difficulty Indices", ["Course", "Front 9", "Back 9"], difficulty_indices_data)
     table_stream = table_generation.create_image_from_table(str(difficulty_indices_table))
-    attachment = discord.File(fp=table_stream, filename="rankings.png")
+    attachment = discord.File(fp=table_stream, filename="indices.png")
     table_stream.close()
     return ctx.respond(file=attachment)
 
@@ -833,31 +846,46 @@ def get_player_profile(ctx, player_id):
 
     # Retrieve the player's scores
     query = f"""
-        SELECT timestamp, course_id, score
+        SELECT course_id, character, score
         FROM {SCORES_TABLE}
-        WHERE player_id = %s;
+        WHERE player_id = %s
+        ORDER BY timestamp DESC;
     """
     result = db_helper.select(query, (player_id,))
-    result = sorted(result, key=lambda x: x[0], reverse=True)  # Sort by timestamp in descending order (most recent scores first)
 
-    # Select only the most recent 40 scores for the table
-    most_recent_scores = [[course_id, score] for timestamp, course_id, score in result[:40]]
-
-    # Dictionary to store scores by course ID
+    character_stats = defaultdict(int)
     scores_dict = {}
+    total_scores = len(result)
 
-    # Populate dictionary
-    for course_id, score in most_recent_scores:
+    for course_id, character, score in result:
+        character_stats[character] += 1
+        
         if course_id in scores_dict:
             scores_dict[course_id].append(score)
         else:
             scores_dict[course_id] = [score]
+
+    # Calculate and save character usage percentages
+    character_percentages = {char: (count / total_scores) * 100 for char, count in character_stats.items()}
+
+    # Find the top 3 most used characters
+    top_characters = dict(sorted(character_percentages.items(), key=lambda item: item[1], reverse=True)[:3])
+
+    # Generate a formatted list
+    top_characters_list = [
+        f"   {i + 1}. {char} ({percentage:.2f}%)"
+        for i, (char, percentage) in enumerate(top_characters.items())
+    ]
+
+    # Join the list into a string
+    top_characters_str = "\n".join(top_characters_list)
 
     # Calculate average score for each course
     average_dict = {}
     for course_id, scores in scores_dict.items():
         average = sum(scores) / len(scores)
 
+        # Make it so it always shows the sign for the score
         average_str = f"{average:.2f}"
         if average == 0.0:
             average_str = f"±{average_str}"
@@ -880,12 +908,14 @@ def get_player_profile(ctx, player_id):
 
         course_averages_table_data.append(course_entry)
 
-    course_averages_table = table_generation.create_ascii_table("Course Averages (Most Recent 40) (+/-)", ["Course", "Front 9", "Back 9"], course_averages_table_data)
+    course_averages_table = table_generation.create_ascii_table("Course Averages", ["Course", "Front 9", "Back 9"], course_averages_table_data)
     rating_str = f"{player_rating:.2f}" if player_rating != INVALID_RATING else "NR"
 
     table_str = (
     f" Player: {player_name}\n"
     f" Rating: {rating_str}\n"
+    f" Favorite Characters:\n"
+    f"{top_characters_str}\n"
     "\n"
     f"{course_averages_table}"
     )
@@ -1082,4 +1112,3 @@ def generate_difficulty_indices_sheet():
             LEADERBOARD_SPREADSHEET_ID, [[last_updated_msg]], "Difficulty Indices", "A2")
     except Exception:
         raise
-
