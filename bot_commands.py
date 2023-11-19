@@ -25,7 +25,7 @@ import string
 
 # Load environment variables
 load_dotenv()
-SCORE_SUBMISSION_THREAD_ID = os.getenv("SCORE_SUBMISSION_THREAD_ID")
+SCORE_SUBMISSION_THREAD_ID = int(os.getenv("SCORE_SUBMISSION_THREAD_ID"))
 SCORE_SUBMISSION_THREAD_LINK = os.getenv("SCORE_SUBMISSION_THREAD_LINK")
 
 # Get logger for current module
