@@ -12,6 +12,7 @@ from globals import *
 import table_generation
 import utils
 
+from dotenv import load_dotenv
 import discord
 
 from collections import defaultdict
@@ -19,7 +20,13 @@ from datetime import datetime
 import math
 import random
 import logging
+import os
 import string
+
+# Load environment variables
+load_dotenv()
+SCORE_SUBMISSION_THREAD_ID = os.getenv("SCORE_SUBMISSION_THREAD_ID")
+SCORE_SUBMISSION_THREAD_LINK = os.getenv("SCORE_SUBMISSION_THREAD_LINK")
 
 # Get logger for current module
 logger = logging.getLogger(__name__)
@@ -144,6 +151,49 @@ def get_course_id(course, nine):
         raise ValueError("Course details not found.")
 
 
+def get_course_info(course_id: int):
+    """
+    Retrieve the course name, round format, tees and greens based on a course ID.
+
+    Parameters:
+        course_id: The ID of the golf course.
+
+    Returns:
+        course_name (str): The name of the golf course.
+        round_format (str): The format of the round (e.g., "18 holes").
+        tees (str): The tee from which the round was played.
+        greens (str): The tee from which the round was played.
+
+    Raises:
+        ValueError: If the course details are not found in the database.
+    """
+
+    query = f"""
+        SELECT course_name, nine FROM {COURSES_TABLE} 
+        WHERE course_id = %s;
+    """
+    result = db_helper.select(query, (course_id,))[0]
+    if result:
+        return result
+    else:
+        raise ValueError("Course details not found.")
+    
+
+def get_player_name(player_id: int):
+    
+    query = f"""
+        SELECT player_name
+        FROM {PLAYERS_TABLE}
+        WHERE discord_id = %s
+    """
+    result = db_helper.select(query, (player_id,))
+
+    if result:
+        return result[0][0]
+    else:
+        raise ValueError("Player not found.")
+
+
 def add_score_to_queue(ctx, course, nine, character, score):
     """
     Add a golf score entry to the verification queue.
@@ -162,6 +212,10 @@ def add_score_to_queue(ctx, course, nine, character, score):
         ValueError: If there is an issue with the provided values.
         Exception: If there is an error during the database interaction.
     """
+    
+    # Check if the thread ID matches the required_thread_id
+    if ctx.channel_id != SCORE_SUBMISSION_THREAD_ID:
+        return ctx.respond(f"Error: Scores can only be submitted in {SCORE_SUBMISSION_THREAD_LINK}. Please go there to submit your score.")
 
     player_name = ctx.author.name
     player_id = ctx.author.id
@@ -307,6 +361,35 @@ def verify_score(ctx, hash):
 
         timestamp, course_id, player_id, character, score, player_name = pending_round
 
+        # Check for personal record
+        query = f"""
+            SELECT MIN(score) AS personal_record
+            FROM {SCORES_TABLE}
+            WHERE player_id = %s AND course_id = %s
+            LIMIT 1;
+        """
+        personal_record = db_helper.select(query, (player_id, course_id))[0][0]
+        personal_record_status = None
+        if personal_record == None or score <= personal_record:
+            personal_record_status = "New"
+            if score == personal_record:
+                personal_record_status = "Tied"
+
+        if personal_record_status != None:
+            # Check for server record
+            query = f"""
+                SELECT MIN(score) AS server_record
+                FROM {SCORES_TABLE}
+                WHERE course_id = %s
+                LIMIT 1;
+            """
+            server_record = db_helper.select(query, (course_id,))[0][0]
+            server_record_status = None
+            if server_record == None or score <= server_record:
+                server_record_status = "New"
+                if score == server_record:
+                    server_record_status = "Tied"
+
         # Calculate adjusted score
         difficulty_indices = get_difficulty_indices()
         difficulty_index = difficulty_indices[course_id - 1]
@@ -356,8 +439,17 @@ def verify_score(ctx, hash):
                 rating = excluded.rating;
         """
         db_helper.insert_single(ratings_insert_query, (player_id, player_name, new_rating))
+        
+        message = f"Successfully submitted round {hash}."
+        if personal_record_status != None:
+            course_name, nine = get_course_info(course_id)
+            player_name = get_player_name(player_id)
+            message += f"\n{personal_record_status} personal record for **{player_name}** on `{course_name} ({nine})`!"
 
-        return ctx.respond(f"Successfully submitted round {hash}.")
+            if server_record_status != None:
+                message += f"\nWow! {server_record_status} server record for `{course_name} ({nine})`!"
+
+        return ctx.respond(message)
     except Exception as e:
         return ctx.respond(f"Error: {e}")
 
@@ -843,6 +935,222 @@ def generate_top_scores_table(ctx):
     return ctx.respond(file=attachment)
 
 
+def generate_server_records_table(ctx):
+
+    query = f"""
+        SELECT c.course_name, c.nine, p.player_name, s.timestamp, s.character, s.score
+        FROM {SCORES_TABLE} s
+        JOIN {COURSES_TABLE} c ON s.course_id = c.course_id
+        JOIN {PLAYERS_TABLE} p ON s.player_id = p.discord_id
+        WHERE (s.course_id, s.score) IN (
+            SELECT course_id, MIN(score) as min_score
+            FROM {SCORES_TABLE}
+            GROUP BY course_id
+        )
+        ORDER BY s.course_id ASC, s.timestamp ASC;
+    """
+    scores = db_helper.select(query)
+
+    table_data = []
+
+    for course in COURSES:
+        for nine in NINES:
+            records = [
+                [str(score), player_name, datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d"), character]
+                for course_name, nine_, player_name, timestamp, character, score in scores
+                if course_name == course and nine_ == nine
+            ]
+
+            # Add placeholder if no record exists
+            if not records:
+                records = [["--", "--", "--", "--"]]
+
+            table_data.append(records)
+
+    # Organize data for final table
+    final_data = []
+    for course_index in range(len(COURSES)):
+        front_9_entry = table_data[course_index * len(NINES)]
+        back_9_entry = table_data[(course_index * len(NINES)) + 1]
+        max_entries = max(len(front_9_entry), len(back_9_entry))
+
+        for entry_index in range(max_entries):
+            course_name = COURSES[course_index] if entry_index == 0 else ""
+            row_header = [course_name]
+
+            # Fill unused entries with placeholders
+            front_9_entry_row = front_9_entry[entry_index] if len(front_9_entry) > entry_index else [""] * 4
+            back_9_entry_row = back_9_entry[entry_index] if len(back_9_entry) > entry_index else [""] * 4
+
+            # Do not copy the score for entries past the first
+            if entry_index > 0:
+                front_9_entry_row = [""] + front_9_entry_row[1:]
+                back_9_entry_row = [""] + back_9_entry_row[1:]
+
+            # Flatten
+            row_data = [item for sublist in [front_9_entry_row, back_9_entry_row] for item in sublist]
+
+            # Combine data with header and add row to final table
+            row = row_header + row_data
+            final_data.append(row)
+        
+        final_data.append([""] * len(final_data[0]))
+
+    # Insert table header at the beginning
+    final_data.insert(0, ["Course", "Score", "Player", "Date", "Character", "Score", "Player", "Date", "Character"])
+    # Find the maximum length in characters for each column
+    max_lengths = [max(map(len, col)) for col in zip(*final_data)]
+
+    dashes = ["-" * (length + 1) for length in max_lengths]
+    final_data.insert(1, dashes)
+
+    # Format each element in the list of lists based on max column width
+    formatted_rows = [
+        ["{:<{}}".format(value, width + 1) for value, width in zip(row, max_lengths)]
+        for row in final_data
+    ]
+
+    table_header_section_length = sum([length + 2 for length in max_lengths[:1]])
+    front_9_section_length = sum([length + 2 for length in max_lengths[1:5]])
+    back_9_section_length = sum([length + 2 for length in max_lengths[5:]])
+    table_sections = ["", "Front 9", "Back 9"]
+    table_section_lengths = [table_header_section_length, front_9_section_length, back_9_section_length]
+    formatted_table_sections = ["{:^{}}".format(value, width - 1) for value, width in zip(table_sections, table_section_lengths)]
+    formatted_rows.insert(0, formatted_table_sections)
+
+    table_title_section_length = sum([length + 2 for length in max_lengths])
+    table_title = f"Server Records"
+    formatted_table_sections = ["{:^{}}".format(table_title, table_title_section_length - 1)]
+    formatted_rows.insert(0, formatted_table_sections)
+
+    # Insert a space at the start and end of each row. Separate the rows with new lines.
+    server_records_table = "\n".join([" " + " ".join(row) + " " for row in formatted_rows[:-1]])
+    
+    # Create and post the table from the data
+    table_stream = table_generation.create_image_from_table(server_records_table)
+    formatted_date = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    attachment = discord.File(fp=table_stream, filename=f"server_records_{formatted_date}.png")
+    table_stream.close()
+    return ctx.respond(file=attachment)
+
+
+def generate_personal_records_table(ctx, player_id):
+
+    if not player_id:
+        player_id = ctx.author.id
+    elif not player_id.isdigit():
+        return ctx.respond("Player ID must be an integer.")
+
+    # Get the player's name from the database
+    query = f"""
+        SELECT player_name
+        FROM {PLAYERS_TABLE}
+        WHERE discord_id = %s
+    """
+    result = db_helper.select(query, (player_id,))
+
+    if result == []:
+        return ctx.respond("Player not found.")
+    
+    player_name = result[0][0]
+
+    query = f"""
+        SELECT c.course_name, c.nine, s.timestamp, s.character, s.score
+        FROM {SCORES_TABLE} s
+        JOIN {COURSES_TABLE} c ON s.course_id = c.course_id
+        WHERE s.player_id = %s AND (s.course_id, s.score) IN (
+            SELECT course_id, MIN(score) as min_score
+            FROM {SCORES_TABLE}
+            WHERE player_id = %s
+            GROUP BY course_id
+        )
+        ORDER BY s.course_id ASC, s.timestamp ASC;
+    """
+    scores = db_helper.select(query, (player_id, player_id))
+
+    table_data = []
+
+    for course in COURSES:
+        for nine in NINES:
+            records = [
+                [str(score), datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d"), character]
+                for course_name, nine_, timestamp, character, score in scores
+                if course_name == course and nine_ == nine
+            ]
+
+            # Add placeholder if no record exists
+            if not records:
+                records = [["--", "--", "--"]]
+
+            table_data.append(records)
+
+    # Organize data for final table
+    final_data = []
+    for course_index in range(len(COURSES)):
+        front_9_entry = table_data[course_index * len(NINES)]
+        back_9_entry = table_data[(course_index * len(NINES)) + 1]
+        max_entries = max(len(front_9_entry), len(back_9_entry))
+
+        for entry_index in range(max_entries):
+            course_name = COURSES[course_index] if entry_index == 0 else ""
+            row_header = [course_name]
+
+            # Fill unused entries with placeholders
+            front_9_entry_row = front_9_entry[entry_index] if len(front_9_entry) > entry_index else [""] * 3
+            back_9_entry_row = back_9_entry[entry_index] if len(back_9_entry) > entry_index else [""] * 3
+
+            # Do not copy the score for entries past the first
+            if entry_index > 0:
+                front_9_entry_row = [""] + front_9_entry_row[1:]
+                back_9_entry_row = [""] + back_9_entry_row[1:]
+
+            # Flatten
+            row_data = [item for sublist in [front_9_entry_row, back_9_entry_row] for item in sublist]
+
+            # Combine data with header and add row to final table
+            row = row_header + row_data
+            final_data.append(row)
+        
+        final_data.append([""] * len(final_data[0]))
+
+    # Insert table header at the beginning
+    final_data.insert(0, ["Course", "Score", "Date", "Character", "Score", "Date", "Character"])
+    # Find the maximum length in characters for each column
+    max_lengths = [max(map(len, col)) for col in zip(*final_data)]
+
+    dashes = ["-" * (length + 1) for length in max_lengths]
+    final_data.insert(1, dashes)
+
+    # Format each element in the list of lists based on max column width
+    formatted_rows = [
+        ["{:<{}}".format(value, width + 1) for value, width in zip(row, max_lengths)]
+        for row in final_data
+    ]
+
+    table_header_section_length = sum([length + 2 for length in max_lengths[:1]])
+    front_9_section_length = sum([length + 2 for length in max_lengths[1:4]])
+    back_9_section_length = sum([length + 2 for length in max_lengths[4:]])
+    table_sections = ["", "Front 9", "Back 9"]
+    table_section_lengths = [table_header_section_length, front_9_section_length, back_9_section_length]
+    formatted_table_sections = ["{:^{}}".format(value, width - 1) for value, width in zip(table_sections, table_section_lengths)]
+    formatted_rows.insert(0, formatted_table_sections)
+
+    table_title_section_length = sum([length + 2 for length in max_lengths])
+    table_title = f"Personal Records ({player_name})"
+    formatted_table_sections = ["{:^{}}".format(table_title, table_title_section_length - 1)]
+    formatted_rows.insert(0, formatted_table_sections)
+
+    # Insert a space at the start and end of each row. Separate the rows with new lines.
+    personal_records_table = '\n'.join([" " + " ".join(row) + " " for row in formatted_rows[:-1]])
+
+    # Create and post the table from the data
+    table_stream = table_generation.create_image_from_table(personal_records_table)
+    formatted_date = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    attachment = discord.File(fp=table_stream, filename=f"server_records_pid{player_id}_{formatted_date}.png")
+    table_stream.close()
+    return ctx.respond(file=attachment)
+
+
 def get_difficulty_indices_table(ctx):
 
     difficulty_indices = get_difficulty_indices()
@@ -954,7 +1262,8 @@ def get_player_profile(ctx, player_id):
     table_str = (
     f" Player: {player_name}\n"
     f" Rating: {rating_str}\n"
-    f" Favorite Characters:\n"
+    f" Games Played: {total_scores}\n"
+    " Favorite Characters:\n"
     f"{top_characters_str}\n"
     "\n"
     f"{course_averages_table}"
