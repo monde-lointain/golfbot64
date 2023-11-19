@@ -158,6 +158,38 @@ async def generate_top_scores(ctx):
     await bot_commands.generate_top_scores_table(ctx)
 
 
+@bot.slash_command(name="server_records", description="Get the course records for the server.")
+async def generate_server_records(ctx):
+    """
+    Slash command to create and post a table of the server records.
+
+    Parameters:
+        ctx: The context of the command.
+
+    Returns:
+        none
+    """
+
+    await bot_commands.generate_server_records_table(ctx)
+
+
+@bot.slash_command(name="personal_records", description="Get a player's personal records.")
+@option("player_id", description="Enter the Discord ID of the player. Leave blank to get your personal records.", required=False)
+async def generate_personal_records(ctx, player_id):
+    """
+    Slash command to create and post a table of the player's current personal records.
+
+    Parameters:
+        ctx: The context of the command.
+        player_id (str): The ID of the player to generate the table for.
+
+    Returns:
+        none
+    """
+
+    await bot_commands.generate_personal_records_table(ctx, player_id)
+
+
 @bot.slash_command(name="profile", description="Get a player's profile.")
 @option("player_id", description="Enter the Discord ID of the player. Leave blank to get your profile.", required=False)
 async def get_profile(ctx, player_id):
